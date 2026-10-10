@@ -24,7 +24,7 @@ def extract_text(pdf_path):
     return cleaned_text
 
 # --- 2. CHUNK TEXT ---
-def chunk_text(text, chunk_size=600, overlap=100):
+def chunk_text(text, chunk_size=1200, overlap=200):
     chunks = []
     start = 0
     while start < len(text):
@@ -34,11 +34,21 @@ def chunk_text(text, chunk_size=600, overlap=100):
     print(f"✂️  Split cleaned document into {len(chunks)} chunks.")
     return chunks
 
-# --- 3. VECTOR DATABASE (CHROMADB) SETUP ---
-def build_vector_store(chunks):
-    print("🧠 Creating embeddings and storing in ChromaDB...")
-    client = chromadb.Client()
-    collection = client.create_collection(name="pdf_knowledge")
+# --- 3. PERSISTENT VECTOR DATABASE (CHROMADB) ---
+def get_vector_store(pdf_path):
+    # Connect to persistent storage folder
+    client = chromadb.PersistentClient(path="./chroma_db")
+    collection = client.get_or_create_collection(name="pdf_knowledge")
+
+    # If the database already has chunks saved, use them directly!
+    if collection.count() > 0:
+        print(f"⚡ Loaded {collection.count()} chunks from disk. Skipping re-indexing!")
+        return collection
+
+    # Otherwise, it's the first time: extract and index!
+    print("📦 First run detected. Ingesting PDF into ChromaDB...")
+    text = extract_text(pdf_path)
+    chunks = chunk_text(text)
 
     for i, chunk in enumerate(chunks):
         response = ollama.embed(model=EMBED_MODEL, input=chunk)
@@ -49,7 +59,8 @@ def build_vector_store(chunks):
             embeddings=[embedding],
             documents=[chunk]
         )
-    print("✅ Indexing complete!")
+
+    print(f"✅ Indexing complete! Saved {collection.count()} chunks to disk.")
     return collection
 
 # --- 4. RETRIEVE AND GENERATE (WITH STREAMING & MEMORY) ---
@@ -61,7 +72,7 @@ def chat_with_pdf(collection, user_question, history):
     # 4b. Find top 4 chunks
     results = collection.query(
         query_embeddings=[query_embed],
-        n_results=7
+        n_results=4
     )
     retrieved_chunks = results["documents"][0]
     context = "\n---\n".join(retrieved_chunks)
@@ -102,9 +113,7 @@ if __name__ == "__main__":
         print(f"❌ Error: {PDF_PATH} not found!")
         exit(1)
 
-    text = extract_text(PDF_PATH)
-    chunks = chunk_text(text)
-    collection = build_vector_store(chunks)
+    collection = get_vector_store(PDF_PATH)
 
     print("\n" + "="*50)
     print("🚀 Ready! Ask questions about your PDF (type 'exit' to quit):")
